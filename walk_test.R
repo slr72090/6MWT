@@ -12,7 +12,7 @@ require(ggplot2)
 require(cowplot)
 require(magrittr)
 require(adept)
-
+select <- dplyr::select
 ## Function scripts
 source("functions.R")
 
@@ -23,25 +23,33 @@ source("functions.R")
 #subjID = as.numeric(args[1])
 #filename <- paste0("walk_",subjID,".csv")
 
-#------------------------------------------------------------------------------------------------------------
-filename = "./6MWT/02_pocket.csv"
-min_time_display = 0
-max_time_display = 120 #number of seconds to plot on x axis 
-textSize = 10
-save_plots = F
+## Input file specifications ------------------------------------------------------------------------------------------------------------
+num = "1" # Patient number 
+location = "hip" # Location of accelerometer
+filename = paste0("uic_",num,"_",location,".csv") # Input csv name 
+min_time_display = 30 
+max_time_display = 45 # number of seconds of raw data to plot on x axis 
+
+# Plotting specifications
+textSize = 10  
+save_plots = T
 source("plot_themes.R")
 
 ## ANALYZE AND PLOT RAW DATA ----------------------------------------------------------------------------------
-#filename = "walk.csv"
+
 df <- read.csv(filename) %>% 
   mutate(date_time= as.POSIXct(Time, format = "%Y-%m-%dT%H:%M:%SZ"),
          t_rel = Seconds - Seconds[1],
          vm = sqrt(X^2 + Y^2 + Z^2)) %>% 
   filter(t_rel > min_time_display) %>% # truncate data according to min_time_display
-  mutate(t_rel = t_rel - min(t_rel)) 
+  mutate(t_rel = t_rel - min(t_rel),
+         location = location) 
 
-
-## Plotting specs  ----------------------------
+## For a 6 min test, tmax should be ~360 seconds, if not take the LAST 6 min of the available data
+if(max(df$t_rel > 375)){
+  df <- df %>% filter(t_rel >= (max(t_rel) - 360))
+  df$t_rel <- df$t_rel - df$t_rel[1]
+}
 
 
 ## Plot raw accelerometry  ------------------------------
@@ -58,22 +66,26 @@ p_raw <- ggplot(dfm_raw,aes(x = t_rel, y = value, color = variable)) +
 
 ## Plot vector magnitude -----------------------------------------------
 dfm_vm <- df %>% 
-  select(c(ID, t_rel, vm))
+  select(c(ID, t_rel, vm, location))
 
 p_vm <- ggplot(dfm_vm,aes(x = t_rel, y = vm)) + 
-  geom_line() +
-  xlim(0,max_time_display) + 
+  geom_line(aes(color = location)) +
+  xlim(min_time_display,max_time_display) + 
   xlab("Relative time") + ylab("Vector Magnitude") + 
-  plot_themes 
+  plot_themes + facet_grid(location~.) +
+  xlab("Relative time (s)")
 
-## Combined plot ------------------------------------------------
 p_combined_raw = plot_grid(p_raw, p_vm, ncol = 1)
+
 if(save_plots){
+  save_plot(paste0("vm_hip_uic_",num,".pdf"), p_vm, base_width = 8, base_height = 4)
   save_plot(paste0("raw_data_", unique(df$ID),".pdf"),p_combined_raw, base_width = 12, base_height = 6)
 }
 
-## Calculate vector mean counts --------------------------------------------------
+
+## CALCULATE THE VECTOR MEAN COUNTS --------------------------------------------------------------------------
 # Set specs -----------------------------------------
+
 n_sec = 2 #Length of averaging window 
 sampling_freq = 30 #30hz
 this_ind = unique(df$ID) #specify individual 
@@ -107,7 +119,7 @@ vmc.df <- vmc.df %>% left_join(vmc.df.rest, by = "t_rel") %>%
   filter(t_rel < max(df$t_rel) - cutoff_end, 
          t_rel > min(df$t_rel) + cutoff_start)
 
-## Plot vmc 
+## Plot vector mean counts 
 p_vmc <- ggplot(vmc.df, aes(x = t_rel/60, y = vmc)) +
   facet_grid(ID ~.) + 
   geom_tile(aes(fill = factor(resting)),  height = Inf, alpha = 0.1) +
@@ -122,11 +134,11 @@ if(save_plots){
   save_plot(paste0("vector_mean_counts_", this_ind, ".pdf"), p_vmc, base_width = 12, base_height = 3)
 }
 
-## GENERATE TEMPLATE(S) ## -----------------------------------------------------------------------------------------------
+## GENERATE STRIDE TEMPLATE(S) ## -----------------------------------------------------------------------------------------------
 
 # Smooth the accelerometry time series 
 window_length = 0.1 # smoothing window length in seconds 
-df$vm_smoothed1 <- windowSmooth(x = df$vm, x.fs = sampling_freq, W = window_length)
+df$vm_smoothed1 <- windowSmooth(x = df$vm, x.fs = sampling_freq, W = window_length) ## Moving window average for a time series
 
 ## Obtain individual-specific subset of data  
 sub.ind <- df %>% filter(ID == this_ind)
@@ -148,9 +160,9 @@ p1 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() +
   labs(title = "(vm) local maxima") + 
   plot_themes
 
+p1
 ## Manually identify stride peaks
-stride_peak_vec = c(6,11,15)
-
+stride_peak_vec = c(4,9,14)
 ## Plot 2: Manually identified maxima
 p2 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() + 
   geom_vline(xintercept = x1.locMax[stride_peak_vec], color = "red") + 
@@ -159,6 +171,28 @@ p2 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() +
   ylab("") + 
   labs(title = "(vm) local maxima subset") +
   plot_themes
+p2
+
+## NEXT SEGMENT### -----------------------------
+update_peak_df = T
+if(update_peak_df){
+  if(file.exists("df_peaks.rda")){
+    load("df_peaks.rda")
+    df_peaks_old <- df_peaks
+  }
+  if(!file.exists("df_peaks.rda")){
+    df_peaks_old = data.frame()
+  }
+  df_ind <- data.frame(ind = as.factor(this_ind),
+                       location = location,
+                       peaks = stride_peak_vec)
+  df_peaks <- rbind(df_peaks_old, df_ind) %>% distinct()
+  if(nrow(df_peaks) > nrow(df_peaks_old)){
+    save(df_peaks, file = "df_peaks.rda")
+  }
+}
+
+###### CHUNK 2 ## -------------------------------------------------------------------------------
 
 if(save_plots){
   p_combined <- plot_grid(p1,p2)
@@ -169,6 +203,10 @@ if(save_plots){
 template.ind1 <- cut.and.avg(x1, x1.locMax[stride_peak_vec])
 df_template <- data.frame(x = c(1:length(template.ind1)), y = template.ind1)
 
+save_templates = T
+if(save_templates){
+  save(template.ind1, df_template, file = paste0("template_",this_ind,"_",location,".rda"))
+}
 p_template <- ggplot(df_template, aes(x = x, y = y)) + 
   geom_line(col = "red") + 
   labs(title = "Template") + 
@@ -184,18 +222,18 @@ if(save_plots){
 
 # Output segmented data 
 out.ind1 <- segmentPattern(x = df$vm,
-                          x.fs = sampling_freq,
-                          template = template.ind1,
-                          x.adept.ma.W = 0.1,
-                          finetune = "maxima",
-                          finetune.maxima.nbh.W = 0.3,
-                          pattern.dur.seq = seq(0.5, 1.8, length.out = 50),
-                          similarity.measure = "cor",
-                          similarity.measure.thresh = 0.85,
-                          compute.template.idx = TRUE,
-                          run.parallel = F)
+                           x.fs = sampling_freq,
+                           template = template.ind1,
+                           x.adept.ma.W = 0.1,
+                           finetune = "maxima",
+                           finetune.maxima.nbh.W = 0.3,
+                           pattern.dur.seq = seq(0.5, 1.8, length.out = 50),
+                           similarity.measure = "cor",
+                           similarity.measure.thresh = 0.7,
+                           compute.template.idx = TRUE,
+                           run.parallel = F)
 
-hist(out.ind1$sim_i, 100)
+#hist(out.ind1$sim_i, 100)
 
 ## Visualize segemetntation
 if(save_plots){
@@ -212,8 +250,6 @@ plt.df.ind <-
   merge(vmc.df.rest) %>%
   filter(tau_i >= vmc_tau_i, tau_i < vmc_tau_i + n_sec* sampling_freq, resting == 0) %>%
   mutate(ind = this_ind)
-
-#plt.df <- plt.df.ind
 
 ## For data frame #1 (raw vm segments)
 stride.acc.vec.ind <- numeric()
@@ -235,8 +271,8 @@ for (i in 1:nrow(plt.df.ind)){
   stride.idx.vec.ind <- c(stride.idx.vec.ind, 1:x.ind.i.len)
   ## For data frame #2
   x.ind.i_S <- approx(x = seq(0, 1, length.out = length(x.ind.i)),
-                     y = x.ind.i,
-                     xout = seq(0, 1, length.out = 200))$y
+                      y = x.ind.i,
+                      xout = seq(0, 1, length.out = 200))$y
   x.ind.i_S <- as.numeric(scale(x.ind.i_S))
   stride_S.acc.vec.ind <- c(stride_S.acc.vec.ind, x.ind.i_S)
   stride_S.tau_i.vec.ind <- c(stride_S.tau_i.vec.ind, rep(out.i$tau_i, 200))
@@ -245,12 +281,12 @@ for (i in 1:nrow(plt.df.ind)){
 
 ## data frame #1 
 stride.df.ind <- data.frame(acc = stride.acc.vec.ind, 
-                           tau_i = stride.tau_i.vec.ind,
-                           idx = stride.idx.vec.ind)
+                            tau_i = stride.tau_i.vec.ind,
+                            idx = stride.idx.vec.ind)
 ## data frame #2
 stride_S.df.ind <- data.frame(acc = stride_S.acc.vec.ind, 
-                             tau_i = stride_S.tau_i.vec.ind,
-                             phase = stride_S.phase.vec.ind)
+                              tau_i = stride_S.tau_i.vec.ind,
+                              phase = stride_S.phase.vec.ind)
 
 ## Plot segmented walking strides
 plt1 <- 
@@ -270,7 +306,7 @@ plt2 <-
 
 if(save_plots){
   p_combined <- plot_grid(plt1, plt2)
-  save_plot(paste0("segmented_strides_", this_ind, ".pdf"), p_combined, base_width = 12, base_height = 3)
+  save_plot(paste0("segmented_strides_", this_ind, "_", "location", ".pdf"), p_combined, base_width = 12, base_height = 3)
 }
 
 ## CORRELATION CLUSTERING OF SEGMENTED WALKING STRIDES ## ----------------------------------------------------------------------------------
@@ -338,19 +374,46 @@ df_strides_sub <- df_strides %>%
 
 this_lab = paste0(paste0("mean: ",round(df_strides_sub$mean,3)),paste0(", CV: ", round(df_strides_sub$cv,3)))
 p_stride_length <-  ggplot(df_strides, aes(x = tau_i / (sampling_freq * 60), y = T_i / sampling_freq, color = cluster)) + 
-  geom_tile(data = vmc.df.rest, 
-            aes(x = vmc_tau_i / (sampling_freq * 60), y = 1, fill = factor(resting)), 
-            height = Inf, alpha = 0.1, inherit.aes = FALSE) +
+  #geom_tile(data = vmc.df.rest, 
+           # aes(x = vmc_tau_i / (sampling_freq * 60), y = 1, fill = factor(resting)), 
+           # height = Inf, alpha = 0.1, inherit.aes = FALSE) +
   geom_point(alpha = 0.4) + 
-  theme_bw(base_size = 9) + 
-  labs(x = "Exercise time [min]", y = "Estimated stride duration time [s]",
-       color = "Stride assignment: ",
-       fill = "Resting: ") + 
+  labs(x = "Exercise time [min]", y = "Estimated stride duration time [s]") + 
   scale_fill_manual(values = c("white", "blue")) + 
   theme(legend.position = "top",
         legend.background = element_rect(fill = "grey90"))  + 
   scale_y_continuous(limits = c(0.5, 1.8)) + 
-  annotate("text", x = 5, y = 1.5, label = this_lab)
+  annotate("text", x = 1.2, y = 1.5, label = this_lab) + 
+  plot_themes
+  #facet_wrap(location~.)
+save_plot("stride_duration.pdf", p_stride_length, base_width = 8, base_height = 4)
+###### CHUNK 3 ## -------------------------------------------------------------------------------
+
+## Step counts
+df_stride_counts <- df_strides %>% 
+  mutate(min = ceiling(tau_i / (sampling_freq * 60))) %>% 
+  group_by(min) %>% 
+  summarize(n_steps = length(unique(tau_i))) %>% 
+  mutate(ID = this_ind,
+         location = location) %>% 
+  filter(min <=6) %>% 
+  mutate(total = sum(n_steps)) %>% 
+  spread(min, n_steps)
+
+update_stride_counts = T
+if(update_stride_counts){
+  if(file.exists("stride_counts_df.rda")){
+    load("stride_counts_df.rda")
+    df_min_strides_old <- df_min_strides
+  }
+  if(!file.exists("stride_counts_df.rda")){
+    df_min_strides_old <- data.frame()
+  }
+  df_min_strides <- rbind(df_min_strides_old, df_stride_counts) 
+  if(nrow(df_min_strides) > nrow(df_min_strides_old)){
+    save(df_min_strides, file = "stride_counts_df.rda")
+  }
+}
 
 ## Minute-level averages and CoVs
 SEC_PER_MIN = 60
@@ -367,10 +430,9 @@ p_minute_strides <- ggplot(df_strides_summary, aes(x = minute, y = mean)) +
   labs(x = "Exercise time [min]", y = "Average minute-level mean and sd of stride duration time [s]") + 
   scale_y_continuous(limits = c(0.5, 1.8)) + 
   plot_themes
-  
-  
+
 
 if(save_plots){
-  save_plot(paste0("stride_durations_", this_ind, ".pdf"), p_stride_length, base_width = 4, base_height = 3)
-  save_plot(paste0("minute_level_stride_durations_", this_ind, ".pdf"), p_minute_strides, base_width = 4, base_height = 3)
+  save_plot(paste0("stride_durations_", this_ind,"_",location, ".pdf"), p_stride_length, base_width = 4, base_height = 3)
+  save_plot(paste0("minute_level_stride_durations_", this_ind,"_",location, ".pdf"), p_minute_strides, base_width = 4, base_height = 3)
 }
