@@ -5,6 +5,7 @@ devtools::install_github("martakarass/adept")
 
 ## Load packages
 require(dplyr)
+require(tidyr)
 require(reshape2)
 require(lubridate)
 require(gridExtra)
@@ -84,8 +85,7 @@ if(save_plots){
 
 
 ## CALCULATE THE VECTOR MEAN COUNTS --------------------------------------------------------------------------
-# Set specs -----------------------------------------
-
+# Set specs for calculation of vector means -----------------------------------------
 n_sec = 2 #Length of averaging window 
 sampling_freq = 30 #30hz
 this_ind = unique(df$ID) #specify individual 
@@ -101,13 +101,15 @@ rn.seq <- seq(1, to = length(vm), by = win.vl)
 vmc.vec <- sapply(rn.seq, function(rn.i){
   vm.win.idx <- rn.i : (rn.i + win.vl - 1)
   vm.win <- vm[vm.win.idx]
-  vmc(vm.win)
+  vmc(vm.win) #scale to the mean of this segment
 })
 
 vmc.df <- data.frame(vmc = vmc.vec,
                      t_rel = df$t_rel[rn.seq],
                      rn_seq = rn.seq,
                      ID = df$ID[rn.seq]) 
+
+## Assign an indicator to each vector mean count value to signify resting vs. non-resting - not super important for controlled walk test
 vmc.df.rest <- 
   vmc.df %>% 
   filter(ID == this_ind) %>%
@@ -145,9 +147,9 @@ sub.ind <- df %>% filter(ID == this_ind)
 
 ## Identify local maxima from individual data, plot, and hand-pick representative peaks 
 length_plot = 300 # Number of indices to plot 
-x1 <- sub.ind[, "vm_smoothed1"]
-x1 <- x1[!is.na(x1)]
-x1.locMax <- localMaxima(x1)
+x1 <- sub.ind[, "vm_smoothed1"] # take the smoothed vector mean counts for this individual
+x1 <- x1[!is.na(x1)] # remove the NA's
+x1.locMax <- localMaxima(x1) # find the local maxima
 
 df_x1 = data.frame(x = c(1:length_plot), y = x1[1:length_plot])
 
@@ -162,7 +164,8 @@ p1 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() +
 
 p1
 ## Manually identify stride peaks
-stride_peak_vec = c(4,9,14)
+stride_peak_vec = c(3,7,12,18)
+
 ## Plot 2: Manually identified maxima
 p2 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() + 
   geom_vline(xintercept = x1.locMax[stride_peak_vec], color = "red") + 
@@ -173,40 +176,15 @@ p2 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() +
   plot_themes
 p2
 
-## NEXT SEGMENT### -----------------------------
-update_peak_df = T
-if(update_peak_df){
-  if(file.exists("df_peaks.rda")){
-    load("df_peaks.rda")
-    df_peaks_old <- df_peaks
-  }
-  if(!file.exists("df_peaks.rda")){
-    df_peaks_old = data.frame()
-  }
-  df_ind <- data.frame(ind = as.factor(this_ind),
-                       location = location,
-                       peaks = stride_peak_vec)
-  df_peaks <- rbind(df_peaks_old, df_ind) %>% distinct()
-  if(nrow(df_peaks) > nrow(df_peaks_old)){
-    save(df_peaks, file = "df_peaks.rda")
-  }
-}
-
-###### CHUNK 2 ## -------------------------------------------------------------------------------
-
 if(save_plots){
   p_combined <- plot_grid(p1,p2)
   save_plot(paste0("stride_peaks_", this_ind, ".pdf"), p_combined, base_width = 12, base_height = 3)
 }
 
+###### CHUNK 2 ## -------------------------------------------------------------------------------
 ## Generate template by selecting n representative strides, interpolating smoothed vm trajectory for each, and averaging/scaling across the n strides 
-template.ind1 <- cut.and.avg(x1, x1.locMax[stride_peak_vec])
+template.ind1 <- cut.and.avg(x1, x1.locMax[stride_peak_vec]) #Cut x vector at the local maxima, approximate cut parts into common length and average parts point-wise into one vector
 df_template <- data.frame(x = c(1:length(template.ind1)), y = template.ind1)
-
-save_templates = T
-if(save_templates){
-  save(template.ind1, df_template, file = paste0("template_",this_ind,"_",location,".rda"))
-}
 p_template <- ggplot(df_template, aes(x = x, y = y)) + 
   geom_line(col = "red") + 
   labs(title = "Template") + 
@@ -227,13 +205,13 @@ out.ind1 <- segmentPattern(x = df$vm,
                            x.adept.ma.W = 0.1,
                            finetune = "maxima",
                            finetune.maxima.nbh.W = 0.3,
-                           pattern.dur.seq = seq(0.5, 1.8, length.out = 50),
+                           pattern.dur.seq = seq(0.5, 1.8, length.out = 50), # potential lengths of the pattern
                            similarity.measure = "cor",
-                           similarity.measure.thresh = 0.7,
+                           similarity.measure.thresh = 0.7, #Set this threshold to rule in only segments with this level of similarity to the template stride
                            compute.template.idx = TRUE,
                            run.parallel = F)
 
-#hist(out.ind1$sim_i, 100)
+#hist(out.ind1$sim_i, 100) #Uncomment this to plot a histogram of the similarity for the calculated stride vectors
 
 ## Visualize segemetntation
 if(save_plots){
@@ -262,9 +240,9 @@ stride_S.phase.vec.ind <- numeric()
 
 for (i in 1:nrow(plt.df.ind)){
   out.i <- plt.df.ind[i, ]
-  x.ind.i <- x.ind[out.i$tau_i : (out.i$tau_i + out.i$T_i - 1)]
+  x.ind.i <- x.ind[out.i$tau_i : (out.i$tau_i + out.i$T_i - 1)] #Take the raw mean vector counts for this stride
   x.ind.i.len <- length(x.ind.i)
-  if (var(x.ind.i) < 1e-3) next
+  if (var(x.ind.i) < 1e-3) next # IF this is a totally flat stride, ignore
   ## For data frame #1 
   stride.acc.vec.ind   <- c(stride.acc.vec.ind, x.ind.i)
   stride.tau_i.vec.ind <- c(stride.tau_i.vec.ind, rep(out.i$tau_i, x.ind.i.len))
@@ -390,6 +368,8 @@ save_plot("stride_duration.pdf", p_stride_length, base_width = 8, base_height = 
 ###### CHUNK 3 ## -------------------------------------------------------------------------------
 
 ## Step counts
+
+# Get the total number of steps, and the number of steps in each minute (1-6)
 df_stride_counts <- df_strides %>% 
   mutate(min = ceiling(tau_i / (sampling_freq * 60))) %>% 
   group_by(min) %>% 
@@ -400,22 +380,7 @@ df_stride_counts <- df_strides %>%
   mutate(total = sum(n_steps)) %>% 
   spread(min, n_steps)
 
-update_stride_counts = T
-if(update_stride_counts){
-  if(file.exists("stride_counts_df.rda")){
-    load("stride_counts_df.rda")
-    df_min_strides_old <- df_min_strides
-  }
-  if(!file.exists("stride_counts_df.rda")){
-    df_min_strides_old <- data.frame()
-  }
-  df_min_strides <- rbind(df_min_strides_old, df_stride_counts) 
-  if(nrow(df_min_strides) > nrow(df_min_strides_old)){
-    save(df_min_strides, file = "stride_counts_df.rda")
-  }
-}
-
-## Minute-level averages and CoVs
+## Minute-level averages of stride duration, with coefficient of variation
 SEC_PER_MIN = 60
 df_strides_summary <- df_strides %>% 
   mutate(minute = floor(t_rel/SEC_PER_MIN)) %>% 

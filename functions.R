@@ -1,5 +1,5 @@
 
-# Compute vector mean count from vector window\
+# Compute vector mean count from vector window
 vmc <- function(vm.win){
   mean(abs(vm.win - mean(vm.win)))
 }
