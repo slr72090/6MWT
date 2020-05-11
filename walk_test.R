@@ -162,9 +162,10 @@ p1 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() +
   labs(title = "(vm) local maxima") + 
   plot_themes
 
+## Manually identify stride peaks ----------------------------------------------------------
 p1
-## Manually identify stride peaks
 stride_peak_vec = c(3,7,12,18)
+## ----------------------------------------------------------
 
 ## Plot 2: Manually identified maxima
 p2 <- ggplot(df_x1, aes(x = x, y = y)) + geom_line() + 
@@ -380,6 +381,8 @@ df_stride_counts <- df_strides %>%
   mutate(total = sum(n_steps)) %>% 
   spread(min, n_steps)
 
+write.csv(df_stride_counts, file = paste0("./output/individual_", this_ind,"_", location, "_stides_per_minute.csv"))
+
 ## Minute-level averages of stride duration, with coefficient of variation
 SEC_PER_MIN = 60
 df_strides_summary <- df_strides %>% 
@@ -388,6 +391,9 @@ df_strides_summary <- df_strides %>%
   summarize(mean = mean(T_i/sampling_freq),
             sd = sd(T_i/sampling_freq),
             CoV = sqrt(var(T_i/sampling_freq))/mean((T_i/sampling_freq)))
+
+write.csv(df_strides_summary, file = paste0("./output/individual_", this_ind,"_", location, "_stride_duration_per_minute.csv"))
+
 
 p_minute_strides <- ggplot(df_strides_summary, aes(x = minute, y = mean)) + 
   geom_point() + 
